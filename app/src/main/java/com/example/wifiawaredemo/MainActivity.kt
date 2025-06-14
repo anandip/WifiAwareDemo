@@ -74,6 +74,7 @@ class MainActivity : ComponentActivity() {
     private var wifiAwareSession: WifiAwareSession? = null
     private var publisherDiscoverySession: DiscoverySession? = null
     private var subscriberDiscoverySession: DiscoverySession? = null
+    private var networkConnectivityCallback: ConnectivityManager.NetworkCallback? = null
 
     private val logViewModel: LogViewModel by viewModels<LogViewModel>()
 
@@ -131,6 +132,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createSession(onSessionAttached: () -> Unit) {
+        unregisterWifiAwareNetwork()
         var wifiAwareManager: WifiAwareManager? = null
         if (packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI_AWARE)) {
             registerReceiver(
@@ -259,11 +261,8 @@ class MainActivity : ComponentActivity() {
 
         val connectivityManager =
             applicationContext.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-
-        connectivityManager.requestNetwork(
-            networkRequest,
-            NetworkConnectivityCallback(connectSocket = isSubscriber)
-        )
+        networkConnectivityCallback = NetworkConnectivityCallback(connectSocket = isSubscriber)
+        connectivityManager.requestNetwork(networkRequest, networkConnectivityCallback!!)
     }
 
     inner class NetworkConnectivityCallback(private val connectSocket: Boolean) :
@@ -397,11 +396,21 @@ class MainActivity : ComponentActivity() {
     //endregion Subscriber
 
     override fun onDestroy() {
-        super.onDestroy()
+        unregisterWifiAwareNetwork()
         publisherDiscoverySession?.close()
         subscriberDiscoverySession?.close()
         wifiAwareSession?.close()
         executorService.shutdownNow()
+        super.onDestroy()
+    }
+
+    private fun unregisterWifiAwareNetwork() {
+        networkConnectivityCallback?.let {
+            val connectivityManager =
+                applicationContext.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            connectivityManager.unregisterNetworkCallback(it)
+            networkConnectivityCallback = null
+        }
     }
 
     private fun checkAndRequestPermissions(onPermissionsGranted: () -> Unit) {
