@@ -133,6 +133,12 @@ class MainActivity : ComponentActivity() {
 
     private fun createSession(onSessionAttached: () -> Unit) {
         unregisterWifiAwareNetwork()
+        wifiAwareSession?.let {
+            log("Using existing Wi-Fi Aware session.")
+            onSessionAttached()
+            return
+        }
+
         var wifiAwareManager: WifiAwareManager? = null
         if (packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI_AWARE)) {
             registerReceiver(
