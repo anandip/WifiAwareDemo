@@ -77,9 +77,7 @@ class MainActivity : ComponentActivity() {
     private var networkConnectivityCallback: ConnectivityManager.NetworkCallback? = null
 
     private val logViewModel: LogViewModel by viewModels<LogViewModel>()
-
     private val executorService: ExecutorService = Executors.newCachedThreadPool()
-
 
     enum class Mode { NONE, PUBLISHER, SUBSCRIBER }
     private var mode = Mode.NONE
@@ -125,13 +123,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    //region Publisher
-    private fun publish() {
-        log("Publishing.")
-        createSession(::publishService)
-    }
-
-    private fun createSession(onSessionAttached: () -> Unit) {
+    // region Shared
+    private fun createWifiAwareSession(onSessionAttached: () -> Unit) {
         unregisterWifiAwareNetwork()
         wifiAwareSession?.let {
             log("Using existing Wi-Fi Aware session.")
@@ -170,6 +163,82 @@ class MainActivity : ComponentActivity() {
                 log("Wi-Fi Aware session terminated.")
             }
         }, null)
+    }
+
+    private fun requestWifiAwareNetwork(
+        session: DiscoverySession, peerHandle: PeerHandle, port: Int? = null) {
+        log("Requesting Wi-Fi Aware network.")
+        val isSubscriber = (port == null)
+        val networkSpecifier = WifiAwareNetworkSpecifier.Builder(session, peerHandle)
+            .setPskPassphrase("some_passphrase")
+            .apply { port?.let { setPort(it) } }
+            .build()
+
+        val networkRequest = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI_AWARE)
+            .setNetworkSpecifier(networkSpecifier)
+            .build()
+
+        val connectivityManager =
+            applicationContext.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+        networkConnectivityCallback = NetworkConnectivityCallback(connectSocket = isSubscriber)
+        connectivityManager.requestNetwork(networkRequest, networkConnectivityCallback!!)
+    }
+
+    private fun unregisterWifiAwareNetwork() {
+        networkConnectivityCallback?.let {
+            val connectivityManager =
+                applicationContext.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            connectivityManager.unregisterNetworkCallback(it)
+            networkConnectivityCallback = null
+        }
+    }
+
+    inner class NetworkConnectivityCallback(private val connectSocket: Boolean) :
+        ConnectivityManager.NetworkCallback() {
+        private var connected = false
+
+        override fun onAvailable(network: Network) {
+            log("Wi-Fi Aware network available.")
+        }
+
+        override fun onUnavailable() {
+            log("Wi-Fi Aware network unavailable.")
+        }
+
+        override fun onCapabilitiesChanged(
+            network: Network,
+            networkCapabilities: NetworkCapabilities
+        ) {
+            log("Wi-Fi Aware network capabilities changed.")
+            if (!connectSocket || connected) {
+                return
+            }
+            executorService.execute {
+                log("Connecting socket.")
+                val peerAwareInfo =
+                    networkCapabilities.transportInfo as WifiAwareNetworkInfo
+                val peerAddress = peerAwareInfo.peerIpv6Addr
+                val peerPort = peerAwareInfo.port
+                connected = true
+                connectSocket(network, peerAddress!!, peerPort)
+            }
+        }
+
+        override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
+            log("Wi-Fi Aware network ${if (blocked) "BLOCKED" else "unblocked"}.")
+        }
+
+        override fun onLost(network: Network) {
+            log("Wi-Fi Aware network lost.")
+        }
+    }
+    // endregion Shared
+
+    // region Publisher
+    private fun publish() {
+        log("Publishing.")
+        createWifiAwareSession(::publishService)
     }
 
     private fun publishService() {
@@ -219,7 +288,7 @@ class MainActivity : ComponentActivity() {
             serverSocket = ServerSocket(0)
             log("Publisher: Server socket listening on port ${serverSocket.localPort}")
 
-            requestNetwork(publisherDiscoverySession!!, peerHandle, serverSocket.localPort)
+            requestWifiAwareNetwork(publisherDiscoverySession!!, peerHandle, serverSocket.localPort)
 
             val clientSocket: Socket = serverSocket.accept()
             log("Publisher: Client connected: ${clientSocket.inetAddress.hostAddress}")
@@ -250,72 +319,12 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    // endregion Publisher
 
-    private fun requestNetwork(
-        session: DiscoverySession, peerHandle: PeerHandle, port: Int? = null) {
-        log("Requesting Wi-Fi Aware network connection.")
-        val isSubscriber = (port == null)
-        val networkSpecifier = WifiAwareNetworkSpecifier.Builder(session, peerHandle)
-            .setPskPassphrase("some_passphrase")
-            .apply { if (port != null) setPort(port) }
-            .build()
-
-        val networkRequest = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI_AWARE)
-            .setNetworkSpecifier(networkSpecifier)
-            .build()
-
-        val connectivityManager =
-            applicationContext.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-        networkConnectivityCallback = NetworkConnectivityCallback(connectSocket = isSubscriber)
-        connectivityManager.requestNetwork(networkRequest, networkConnectivityCallback!!)
-    }
-
-    inner class NetworkConnectivityCallback(private val connectSocket: Boolean) :
-        ConnectivityManager.NetworkCallback() {
-        private var connected = false
-
-        override fun onAvailable(network: Network) {
-            log("Wi-Fi Aware network available.")
-        }
-
-        override fun onUnavailable() {
-            log("Wi-Fi Aware network unavailable.")
-        }
-
-        override fun onCapabilitiesChanged(
-            network: Network,
-            networkCapabilities: NetworkCapabilities
-        ) {
-            log("Wi-Fi Aware network capabilities changed.")
-            if (!connectSocket || connected) {
-                return
-            }
-            executorService.execute {
-                log("Connecting socket.")
-                val peerAwareInfo =
-                    networkCapabilities.transportInfo as WifiAwareNetworkInfo
-                val peerAddress = peerAwareInfo.peerIpv6Addr
-                val peerPort = peerAwareInfo.port
-                connected = true
-                connectSocket(network, peerAddress!!, peerPort)
-            }
-        }
-
-        override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
-            log("Wi-Fi Aware network ${if (blocked) "BLOCKED" else "unblocked"}.")
-        }
-
-        override fun onLost(network: Network) {
-            log("Wi-Fi Aware network lost.")
-        }
-    }
-    //endregion Publisher
-
-    //region Subscriber
+    // region Subscriber
     private fun subscribe() {
         log("Subscribing.")
-        createSession(::subscribeToService)
+        createWifiAwareSession(::subscribeToService)
     }
 
     private fun subscribeToService() {
@@ -350,7 +359,7 @@ class MainActivity : ComponentActivity() {
         override fun onMessageReceived(peerHandle: PeerHandle, message: ByteArray) {
             val msg = String(message)
             log("Subscriber received message from peer ${peerHandle}: $msg")
-            requestNetwork(subscriberDiscoverySession!!, peerHandle)
+            requestWifiAwareNetwork(subscriberDiscoverySession!!, peerHandle)
         }
 
         override fun onServiceLost(peerHandle: PeerHandle, reason: Int) {
@@ -383,11 +392,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
             log("Received $bytesRead bytes.")
-
             socket.close()
-
             log("Socket closed.")
-
         } catch (e: Exception) {
             log("Socket error: ${e.message}")
             Log.e(TAG, "Socket error", e)
@@ -399,7 +405,7 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    //endregion Subscriber
+    // endregion Subscriber
 
     override fun onDestroy() {
         unregisterWifiAwareNetwork()
@@ -408,15 +414,6 @@ class MainActivity : ComponentActivity() {
         wifiAwareSession?.close()
         executorService.shutdownNow()
         super.onDestroy()
-    }
-
-    private fun unregisterWifiAwareNetwork() {
-        networkConnectivityCallback?.let {
-            val connectivityManager =
-                applicationContext.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-            connectivityManager.unregisterNetworkCallback(it)
-            networkConnectivityCallback = null
-        }
     }
 
     private fun checkAndRequestPermissions(onPermissionsGranted: () -> Unit) {
@@ -472,7 +469,7 @@ fun WifiAwareApp(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         LazyColumn(
-            modifier = Modifier.weight(1f), // Make LazyColumn take available height
+            modifier = Modifier.weight(1f), // Take full height
             state = lazyListState
         ) {
             itemsIndexed(logViewModel.messages) { index, message ->
@@ -485,9 +482,7 @@ fun WifiAwareApp(
             }
         }
 
-        Row(Modifier
-            .fillMaxWidth()
-            .padding(30.dp),
+        Row(Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly) {
             Button(
                 onClick = onStartPublisher,
@@ -502,6 +497,7 @@ fun WifiAwareApp(
         }
     }
 
+    // Scrolls to the most recently added message.
     LaunchedEffect(logViewModel.messages.size) {
         if (logViewModel.messages.isNotEmpty()) {
             coroutineScope.launch {
@@ -517,7 +513,7 @@ fun WifiAwareApp(
 fun WifeAwareAppPreview() {
     WifiAwareDemoTheme {
         val logViewModel = LogViewModel()
-        for (i in 1..20) {
+        for (i in 1..25) {
             logViewModel.addMessage("Message $i")
         }
         WifiAwareApp(logViewModel, {}, {})
