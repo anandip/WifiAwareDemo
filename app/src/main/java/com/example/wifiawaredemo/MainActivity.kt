@@ -264,8 +264,6 @@ class MainActivity : ComponentActivity() {
         override fun onMessageReceived(peerHandle: PeerHandle, message: ByteArray) {
             val msg = String(message)
             log("Publisher received message from ${peerHandle}: $msg")
-            publisherDiscoverySession?.sendMessage(
-                peerHandle, 1, "Hello from Publisher!".toByteArray())
             executorService.execute { startServerSocket(peerHandle) }
         }
 
@@ -289,6 +287,9 @@ class MainActivity : ComponentActivity() {
             log("Publisher: Server socket listening on port ${serverSocket.localPort}")
 
             requestWifiAwareNetwork(publisherDiscoverySession!!, peerHandle, serverSocket.localPort)
+
+            publisherDiscoverySession?.sendMessage(
+                peerHandle, 1, "Hello from Publisher!".toByteArray())
 
             val clientSocket: Socket = serverSocket.accept()
             log("Publisher: Client connected: ${clientSocket.inetAddress.hostAddress}")
@@ -351,7 +352,6 @@ class MainActivity : ComponentActivity() {
                                          serviceSpecificInfo: ByteArray,
                                          matchFilter: List<ByteArray>) {
             log("Found peer: $peerHandle")
-
             subscriberDiscoverySession?.sendMessage(
                 peerHandle, 1, "Hello from Subscriber!".toByteArray())
         }
